@@ -148,8 +148,8 @@ function newSession(server) {
 					publicKeyCache = getMsg.msg;
 					showMsg(`!! ******** WARNING ********* !!<br>
 						Please compare public keys (hash) in avoid of MITM attack.<br>
-						Yours:<br>[${sha1(selfPublicKey)}]<br>
-						His/Hers:<br>[${sha1(publicKeyCache)}]<br>
+						Yours:<br>[${SHA1(selfPublicKey)}]<br>
+						His/Hers:<br>[${SHA1(publicKeyCache)}]<br>
 						********************************`, 'red')
 					// -- Send self public key to receiver
 					var now = new Date();

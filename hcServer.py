@@ -90,8 +90,8 @@ class HCS:
 			d_msg = eval(msg)
 
 			### This will cause crash in some cases!! ###
-			for k in d_msg.keys():
-				print('%s: %s' % (k, d_msg[k]))
+			# for k in d_msg.keys():
+			# 	print('%s: %s' % (k, d_msg[k]))
 			#############################################
 
 			if d_msg['type'] == 'login':

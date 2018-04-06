@@ -3,17 +3,20 @@
 // 2018.03.15: Add support of progress in sending slice (HTML5 only)
 // 2018.03.18: Add auto-gen mode; "control-enter" support
 // 2018.04.05: End-to-end encryption realized (plain text only)
+// 2018.04.06: ETE now supports attachements; add key hash comparision (MITM block)
 
-var CLIENT_VER = '180405 - ETE';
+var CLIENT_VER = '180406 - ETE plus';
 
 var DEFAULT_SERVER = 'wss://us2.srdmobile.tk';
+
 var SLICE_THRESHOLD = 40960;						// Data whose length(base64) over this amount will be splited
 var MAX_DATALENTH = SLICE_THRESHOLD*100;			// Max data length(base64)
 var MAX_TXTLENGTH = 2048;							// Max character in message
+var enabledFileExts = ['.jpg', '.gif', '.png'];		// Supported file formate
+var buffer = {};									// Used to receive coming slices and combine them
 
 var ws;												// Websocket
 var sToken;											// To certificate users' validation
-var msgBox = $('#box_msg');							// Session region
 var addrMap = {};									// {nickname: SHA-1}
 
 var sliceQueue = [];								// Queen of data slice
@@ -21,26 +24,29 @@ var sendingSlice = ''								// The sign of sending slice
 var sliceCounter = [0, 0];							// [numSent, numTotal]
 var dataSlices = [];
 
-var buffer = {};									// Used to receive coming slices and combine them
-
-var enabledFileExts = ['.jpg', '.gif', '.png'];		// Supported file formate
-
-var encryptMode = false;
-var publicKeyCache = '@';
-var selfPrivateKey, selfPublicKey;
+var encryptMode = false;							// Using ETE or not
+var publicKeyCache = '@';							// Public key of another user
+var selfPrivateKey, selfPublicKey;					// Current user's PVK and PBK
 
 
-
-function rsaEncrypt(plaintext, key) {
-	var plain = base64_encode(plaintext);
-	return cryptico.encrypt(plain, key).cipher;
+// ===== Basic functions ====================
+function rsaEncrypt(plaintext, key, enable=true) {
+	if (enable) {
+		var plain = base64_encode(plaintext);
+		return cryptico.encrypt(plain, key).cipher;
+	} else {
+		return plaintext;
+	}
 }
 
-function rsaDecrypt(xtext, key) {
-	var detext = cryptico.decrypt(xtext, selfPrivateKey).plaintext;
-	return base64_decode(detext);
+function rsaDecrypt(xtext, key, enable=true) {
+	if (enable) {
+		var detext = cryptico.decrypt(xtext, selfPrivateKey).plaintext;
+		return base64_decode(detext);
+	} else {
+		return xtext;
+	}
 }
-
 
 function getCookie(key) {
 	var arr, reg = new RegExp("(^| )"+key+"=([^;]*)(;|$)");
@@ -50,7 +56,6 @@ function getCookie(key) {
 		return null;
 	}
 }
-
 
 function randomStr(length, symbol=true) {
 	var gen = '';
@@ -67,19 +72,45 @@ function randomStr(length, symbol=true) {
 	return gen;
 }
 
+// ==============================
+// online = true: online mode
+// online = false: offline mode
+// ==============================
+function formStatusSet(online) {
+	$('#s_pvk').prop('disabled', online);
+	$('#s_pbk').prop('disabled', true);
+	$('#s_to').prop('disabled', !online);
+	$('#s_send').prop('disabled', !online);
+	$('#btn_auto').prop('disabled', online);
+	$('#btn_enter').prop('disabled', online);
+	$('#btn_encrypt').prop('disabled', !online);
+	$('#btn_close').prop('disabled', !online);
+	$('#btn_send').prop('disabled', !online);
+	$('#fileSelector').prop('disabled', !online);
+}
+// ===========================================
 
+
+// ================================================================
+// Create a new websocket server, including all events:
+// ws.onopen()
+// ws.onmessage()
+// ws.onclose()
+// ws.onerror()
+// ================================================================
 function newSession(server) {
 
-	// Connect to Web Socket
+	// -- Connect to Web Socket
 	ws = new WebSocket(server);
-	// ws = new WebSocket('ws://127.0.0.1:9001');
 
-	// Set event handlers.
+	// -- Set event handlers
 	ws.onopen = function() {
 		showMsg(`Server opened. Client ver: ${CLIENT_VER}`);
-		document.cookie = `server=${$('#s_server').val()}`;
+		// document.cookie = `server=${$('#s_server').val()}`;
 		document.cookie = `pvk=${$('#s_pvk').val()}`;
 		var now = new Date();
+
+		// -- Send login request
 		loginInfo = {
 			type: 'login',
 			msg: $('#s_pvk').val(),
@@ -89,32 +120,38 @@ function newSession(server) {
 	};
 		
 	ws.onmessage = function(e) {
-		// e.data contains received string.
+		// -- e.data contains received string.
 		var getMsg = JSON.parse(e.data);
 		// console.log(getMsg);
 
+		// -- Server reply "login"
 		if (getMsg.type === 'login') {
 			sToken = getMsg.msg;
 			$('#s_pbk').val(getMsg.to);
 			console.log(`Server ver: ${getMsg.ver}\nGet token: [${sToken}]`);
-			$('#btn_send').prop('disabled', false);
-			$('#btn_close').prop('disabled', false);
-			$('#fileSelector').prop('disabled', false);
+			formStatusSet(true);
 		}
 
 		else if (getMsg.type === 'msg') {
-			// Not a key-exchange request
+			// -- Not a key-exchange request
 			if (getMsg.key != 'true') {
 				if (addrMap[getMsg.from] != undefined) {
 					getMsg.from = addrMap[getMsg.from];
 				}
 				showMsg(getMsg, "blue");
 
-			// Key-exchange request
+			// -- Key-exchange request
 			} else {
+				// -- There is no existing public key
 				if (publicKeyCache === '@') {
 					showMsg(`Get public key from<br>${getMsg.from}.`, 'gray');
 					publicKeyCache = getMsg.msg;
+					showMsg(`!! ******** WARNING ********* !!<br>
+						Please compare public keys (hash) in avoid of MITM attack.<br>
+						Yours:<br>[${sha1(selfPublicKey)}]<br>
+						His/Hers:<br>[${sha1(publicKeyCache)}]<br>
+						********************************`, 'red')
+					// -- Send self public key to receiver
 					var now = new Date();
 					var keyExchangeRequest = {
 						from: $('#s_pbk').val(),
@@ -127,28 +164,32 @@ function newSession(server) {
 					}
 					ws.send(JSON.stringify(keyExchangeRequest));
 					encryptMode = true;
+
 					$('#s_to').val(getMsg.from);
 					$('#s_to').prop('disabled', true);
 					$('#btn_encrypt').prop('disabled', true);
-					$('#fileSelector').prop('disabled', true);
-					// console.log(`PBK: ${publicKeyCache}\nSELFPVK: ${selfPrivateKey}`);
+					// $('#fileSelector').prop('disabled', true);
+
 					showMsg('🔒You have entered encrypt mode.', 'red');
 					document.title='🔒henChat';
 				}
 			}
 		}
 
+		// -- Server info
 		else if (getMsg.type === 'info') {
 			if (getMsg.msg != '0 reciver(s) offline.') {
 				showMsg(`${getMsg.msg}`, 'gray');
 			}
 		}
 
+		// -- Server error info
 		else if (getMsg.type === 'err') {
 			alert(`ERROR from server: ${getMsg.msg}`);
 			ws.close();
 		}
 
+		// -- Slice message
 		else if (getMsg.type === 'slice') {
 			var nextSlice = sliceQueue.pop();
 			$(`#${sendingSlice}`).val(++sliceCounter[0] / sliceCounter[1]);
@@ -160,21 +201,30 @@ function newSession(server) {
 
 	ws.onclose = function() {
 		showMsg("Server closed.");
-		$('#btn_send').prop('disabled', true);
-		$('#btn_close').prop('disabled', true);
-		$('#btn_enter').prop('disabled', false);
-		$('#fileSelector').prop('disabled', true);
+		formStatusSet(false);
+		encryptMode = false;
+		publicKeyCache = '@';
 	};
 
 	ws.onerror = function(e) {
 		showMsg("Server error.", "red");
+		formStatusSet(false);
 	};
 }
 
-	
-function showMsg(msg, color="black") {
-	// msg here is the json
 
+// ================================================================
+// Output something in log region. There are 2 typical situations:
+// 1. msg is plain text: text will be shown directly;
+// 2. msg is json object: text will be handled first.
+// And encrypt mode status can influence the handling process.
+// ================================================================
+function showMsg(msg, color="black") {
+	// msg here is in struct of json
+
+	// ===============================
+	// Search "XSS attack" for detail
+	// ===============================
 	function xssAvoid(rawStr){
 		return rawStr.replace(/</g, '&lt').replace(/>/g, '&gt');
 	}
@@ -185,39 +235,44 @@ function showMsg(msg, color="black") {
 	if (typeof(msg) === 'object') {
 		var now = new Date(parseInt(msg.time));
 
-		// Not in encrypt mode or the message is from the user
+		// -- Not in encrypt mode or the message is from the user
 		if (encryptMode === false || color === 'green') {
 			var strHead = `${now.toString()}<br>[${msg.from}]<br>`;
 			showText = `${strHead}<font color="${color}">${xssAvoid(msg.msg).split('\n').join('<br>')}</font><br>`;
 		
+		// -- In encrypt mode
 		} else {
 			var strHead = `${now.toString()}<br>[🔒${msg.from}]<br>`;
 			showText = `${strHead}<font color="${color}">${xssAvoid(rsaDecrypt(msg.msg, selfPrivateKey)).split('\n').join('<br>')}</font><br>`;
 		}
 
-		// Message with image
+		// -- Message with image
 		if (msg['img'] != undefined) {
 
-			// Whole file
+			// -- Whole file (without spliting)
 			if (msg['rest'] === undefined) {
 
-				showText += `<img src="${msg.img}"><br>`;
+				if (encryptMode === false || color === 'green') {
+					showText += `<img src="${msg.img}"><br>`;
+				} else {
+					showText += `<img src="${rsaDecrypt(msg.img, selfPrivateKey, true)}"><br>`;
+				}
 				showText += '<br>';
 				log.prepend(showText);
 
-			// Sliced file
+			// -- Sliced file
 			} else {
 
 				if (buffer[msg.sign] == undefined) {
 					showMsg(`Receiving an image from<br>${msg.from}<br><progress id="${msg.sign}" value="${msg.size[0]/msg.size[1]}">0%</progress>`, 'gray');
-					buffer[msg.sign] = msg.img;
+					buffer[msg.sign] = rsaDecrypt(msg.img, selfPrivateKey, encryptMode);
 				} else {
-					buffer[msg.sign] += msg.img;
+					buffer[msg.sign] += rsaDecrypt(msg.img, selfPrivateKey, encryptMode);
 					$(`#${msg.sign}`).val(msg.size[0]/msg.size[1]);
 					notice = false;
 				}
 
-				// Transfer finished
+				// -- Transfer finished
 				if (msg['rest'] <= 0) {
 					showText += `<img src="${buffer[msg.sign]}" width="400"><br>`;
 					showText += '<br>';
@@ -226,16 +281,16 @@ function showMsg(msg, color="black") {
 				}
 			}
 
-		// Plain text
+		// -- Text message
 		} else {
 			showText += '<br>';
 			log.prepend(showText);
 		}
 
-		// Show the notification
+		// -- Show the notification
 		if(document.hidden && Notification.permission === "granted" && notice) {
 			var notification = new Notification('henChat', {
-			body: 'New message comes!',
+				body: 'New message comes!',
 			});
 
 			notification.onclick = function() {
@@ -243,11 +298,17 @@ function showMsg(msg, color="black") {
 			};
 		}
 
+	// -- msg is plain text
 	} else {
 		log.prepend(`<font color="${color}">${msg}<br><br></font>`);
 	}
 }
 
+
+// ================================================================
+// Check the extension of selected file. Available extensions are 
+// defined on the head
+// ================================================================
 function fileExtCheck(fileInputLable, extNames) {
 			
 	var fname = fileInputLable.value;
@@ -262,62 +323,65 @@ function fileExtCheck(fileInputLable, extNames) {
 	}
 }
 
-// -------- init --------
-$('#btn_send').prop('disabled', true);
-$('#btn_close').prop('disabled', true);
-$('#btn_encrypt').prop('disabled', true);
-$('#fileSelector').prop('disabled', true);
+// ===== Init ======================================
+formStatusSet(false);
 
-$('#s_server').val(getCookie('server'));
+// $('#s_server').val(getCookie('server'));
 $('#s_pvk').val(getCookie('pvk'));
 
 var fileSelector = document.getElementById('fileSelector');
-// -----------------------
+// =================================================
 
-// -------- Button Events --------
 
+// ===== Button Events =============================
+
+// -- Click "New ID"
 $('#btn_auto').click(function () {
-	$('#s_server').val(DEFAULT_SERVER);
-	$('#btn_keygen').click();
+
+	$('#s_pvk').val(randomStr(64));
+	showMsg('A new key will be generated. Please save it by yourself.', 'gray');
 	$('#btn_enter').click();
 });
 
 
-$('#btn_keygen').click(function () {
-	$('#s_pvk').val(randomStr(64));
-	showMsg('A new key will be generated. Please save it by yourself.', 'gray');
-});
-
-
+// -- Click "Login"
 $('#btn_enter').click(function () {
+
+	// -- Check if pvk's formate is correct
 	if ($('#s_pvk').val().length === 64) {
-		var server = $('#s_server').val();
+
+		// -- Keygen
 		[selfPrivateKey, selfPublicKey] = (function() {
 			var selfRSA = cryptico.generateRSAKey($('#s_pvk').val(), 1024);		// And it would also be used to decrypt
 			return [selfRSA, cryptico.publicKeyString(selfRSA)];				// The later is used to encrypt plain text
 		})();
-		newSession(server);
-		$('#btn_enter').prop('disabled', true);
-		$('#btn_encrypt').prop('disabled', false);
-		$('#btn_send').prop('disabled', false);
-		$('#fileSelector').prop('disabled', false);
+
+		newSession(DEFAULT_SERVER);
+
 	} else {
 		alert('Invalid key.');
 	}
 });
 
 
+// -- Click "ETE"
 $('#btn_encrypt').click(function () {
-	$('#s_to').prop('disabled', true);
-	$('#fileSelector').prop('disabled', true);
-	$('#btn_encrypt').prop('disabled', true);
-	$('#btn_send').prop('disabled', true);
-	$('#s_to').val($('#s_to').val().split('\n')[0]);
+
+	if ($('#s_to').val() === '') {
+		alert('There is no receiver in the list...');
+		return -1;
+	}
+
+	$('#s_to').prop('disabled', true);					// Forbid multi-receiver
+	// $('#fileSelector').prop('disabled', true);		// Forbid file sender (now there is no need to do this)
+	$('#btn_encrypt').prop('disabled', true);			// Forbid ETE button
+	$('#btn_send').prop('disabled', true);				// Temporary block ETE button
+	var receiver = $('#s_to').val().split('\n')[0];		// Fix receiver as the 1st receiver
 
 	var now = new Date();
 	var keyExchangeRequest = {
 		from: $('#s_pbk').val(),
-		to: [$('#s_to').val()],
+		to: [receiver],
 		type: 'msg',
 		msg: selfPublicKey,
 		key: 'true',
@@ -326,15 +390,25 @@ $('#btn_encrypt').click(function () {
 	}
 
 	ws.send(JSON.stringify(keyExchangeRequest));
-	while (publicKeyCache != '@');
-	$('#btn_send').prop('disabled', false);
+	while (publicKeyCache != '@');						// Wait for public key from receiver
+	$('#btn_send').prop('disabled', false);				// Send button recovery
 
 	encryptMode = true;
 });
 
 
+// -- Click "Send"
 $('#btn_send').click(function () {
 
+	var eteSign = (function () {
+		if (encryptMode === true) {
+			return '🔒';
+		} else {
+			return '';
+		}
+	})();
+
+	// -- It is unacceptable to send empty message (no text, no attachement)
 	if ($('#s_send').val() === '' && !fileExtCheck(fileSelector, enabledFileExts)) {
 		showMsg('Cannot send empty message!', 'red');
 
@@ -344,8 +418,10 @@ $('#btn_send').click(function () {
 		var now = new Date();
 		var sendLstWithName = $('#s_to').val().split('\n');
 		var sendLst = [];
+
+		// -- Make receivers' list
 		for (c of sendLstWithName) {
-			if (c.indexOf('#') != -1) {
+			if (c.indexOf('#') != -1) {					// Receiver address with nickname
 				var [nickname, addr] = c.split('#');
 				sendLst.push(addr);
 				addrMap[addr] = nickname;
@@ -354,7 +430,8 @@ $('#btn_send').click(function () {
 			}
 		}
 
-		// Attachment exist
+		// -- Attachment exist
+		// -- If file is supported
 		if (fileExtCheck(fileSelector, enabledFileExts)) {
 					
 			var reader = new FileReader();
@@ -368,15 +445,16 @@ $('#btn_send').click(function () {
 					return -1;
 				}
 
+				// -- Big file (size over slice threshold)
 				if (data.length > SLICE_THRESHOLD) {
-					// Big file(size over slice threshold)
 
 					var cut = function (dataStr, maxSlice) {
 						var sliceNum = parseInt(dataStr.length / maxSlice);
 						var slices = [];
 						var p = 0;
+
 						for (var i=0; i<sliceNum+1; i++) {
-							slices.push(dataStr.substring(p, p+maxSlice));
+							slices.push(rsaEncrypt(dataStr.substring(p, p+maxSlice), publicKeyCache, encryptMode));
 							p += maxSlice;
 						}
 						return slices;
@@ -389,6 +467,7 @@ $('#btn_send').click(function () {
 					var sentLen = 0;
 					var dataLen = data.length;
 
+					// -- Show a process graph
 					showMsg(`File sending... (${dataLen})<br><progress id="${sendingSlice}" value="0">0%</progress>`, 'gray');
 					console.log(`Data has been splited into ${dataSlices.length} parts.`);
 
@@ -402,7 +481,7 @@ $('#btn_send').click(function () {
 							sign: sendingSlice,
 							size: [i+1, dataSlices.length],		// [sent slice, total slice number]
 							rest: dataLen - sentLen,
-							msg: $('#s_send').val(),
+							msg: rsaEncrypt($('#s_send').val(), publicKeyCache, encryptMode),
 							img: dataSlices[i],
 							token: sToken,
 							time: now.getTime().toString()
@@ -417,19 +496,25 @@ $('#btn_send').click(function () {
 					// That part is written in function "ws.onmessage()"
 					ws.send(JSON.stringify(sliceQueue.pop()));
 
-				// Send small file without splitting
+				// -- Send small file without splitting
 				} else {
 
 					var contentWithImg = {
 						from: $('#s_pbk').val(),
 						to: sendLst,
 						type: 'msg',
-						msg: $('#s_send').val(),
-						img: data,
+						msg: rsaEncrypt($('#s_send').val(), publicKeyCache, encryptMode),
+						img: rsaEncrypt(data, publicKeyCache, encryptMode),
 						token: sToken,
 						time: now.getTime().toString()
 					}
-					showMsg(contentWithImg, 'green');
+					var contentWithImg_show = {
+						from: eteSign + $('#s_pbk').val(),
+						msg: $('#s_send').val(),
+						img: data,
+						time: now.getTime().toString()
+					}	// -- Encrypted message cannot be shown directly
+					showMsg(contentWithImg_show, 'green');
 
 					ws.send(JSON.stringify(contentWithImg));
 					$('#s_send').val('');
@@ -439,63 +524,50 @@ $('#btn_send').click(function () {
 			}
 			reader.readAsDataURL(fileSelector.files[0]);
 
-		// Plain text
+		// -- Plain text
 		} else {
 
 			if ($('#s_send').val().length <= MAX_TXTLENGTH) {
 
-				if (encryptMode === true) {
-					var content = {
-						from: $('#s_pbk').val(),
-						to: sendLst,
-						type: 'msg',
-						// msg: cryptico.encrypt($('#s_send').val(), publicKeyCache).cipher,
-						msg: rsaEncrypt($('#s_send').val(), publicKeyCache),
-						token: sToken,
-						time: now.getTime().toString()
-					}
-					var content_plain = {
-						from: '🔒' + $('#s_pbk').val(),
-						to: sendLst,
-						type: 'msg',
-						msg: $('#s_send').val(),
-						token: sToken,
-						time: now.getTime().toString()
-					}
-					showMsg(content_plain, 'green');
-
-				} else {
-
-					var content = {
-						from: $('#s_pbk').val(),
-						to: sendLst,
-						type: 'msg',
-						msg: $('#s_send').val(),
-						token: sToken,
-						time: now.getTime().toString()
-					}
-					showMsg(content, 'green');
-
+				// -- ETE mode
+				var content = {
+					from: $('#s_pbk').val(),
+					to: sendLst,
+					type: 'msg',
+					msg: rsaEncrypt($('#s_send').val(), publicKeyCache, encryptMode),
+					token: sToken,
+					time: now.getTime().toString()
 				}
+				var content_show = {
+					from: eteSign + $('#s_pbk').val(),
+					msg: $('#s_send').val(),
+					time: now.getTime().toString()
+				}
+				showMsg(content_show, 'green');
 
 				ws.send(JSON.stringify(content));
 				$('#s_send').val('');
+
 			} else {
-			showMsg(`Too many characters!(over ${MAX_TXTLENGTH})`, 'red');
+				showMsg(`Too many characters!(over ${MAX_TXTLENGTH})`, 'red');
 			}
 		}
 	}
 });
 			 
 
+// -- Click "Logout"
 $('#btn_close').click(function () {
 	ws.close();
-	// $('#btn_enter').prop('disabled', false);
+	if (encryptMode) {
+		location.reload();
+	}
 });
 
 
-// -------- Key Events --------
+// ===== Key Events ===============================
 
+// -- Press "Ctrl+Enter" to send
 prevKey = '';
 document.onkeydown = function (e) {
 	if (e.key === 'Enter' && prevKey === 'Control') {

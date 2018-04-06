@@ -9,50 +9,46 @@
 	}
 	</script>
 	<!-- Portable devices support -->
-	<meta name="viewport" content="width=device-width, minimum-scale=0.9, maximum-scale=0.9, user-scalable=0, user-scalable=no"/>
-<style type="text/css">
-<!--
-body,td,th {
-	font-family: Microsoft YaHei UI;
-}
-.form_input {
-	width: 100%;
-}
--->
-</style></head>
+	<meta name="viewport" content="width=device-width, minimum-scale=1.0, maximum-scale=1.0, user-scalable=0, user-scalable=no"/>
+	<style type="text/css">
+		<!--
+		body,td,th {
+			font-family: Microsoft YaHei UI;
+		}
+		.form_input {
+			width: 100%;
+		}
+		-->
+	</style>
+</head>
 
 <body>
 <table width="100%" border="0">
   <tr align="left" valign="top">
-    <td width="0">Server</td>
-    <td width="1603"><input name="s_server" type="text" class="form_input" id="s_server",></td>
+    <td width="10"><div align="right">PVK</div></td>
+    <td width="1603"><input type="text" class="form_input" id="s_pvk" maxlength="64",></td>
   </tr>
   <tr align="left" valign="top">
-    <td width="0">PVK</td>
-    <td><input type="text" class="form_input" id="s_pvk" maxlength="64",></td>
-  </tr>
-  <tr align="left" valign="top">
-    <td width="0">PBK</td>
+    <td width="10"><div align="right">PBK</div></td>
     <td><input type="text" disabled class="form_input" id="s_pbk"></td>
   </tr>
   <tr align="left" valign="top">
-    <td width="0">To</td>
+    <td width="10"><div align="right">To</div></td>
     <td><textarea rows="3" class="form_input" id="s_to"></textarea></td>
   </tr>
   <tr align="left" valign="top">
-    <td width="0">Msg</td>
+    <td width="10"><div align="right">Msg</div></td>
     <td><textarea rows="3" class="form_input" id="s_send"></textarea></td>
   </tr>
   <tr align="left" valign="top">
-    <td width="0" nowrap>&nbsp;</td>
+    <td width="10" nowrap>&nbsp;</td>
   <td nowrap><input name="file" type="file" id="fileSelector"></td>
   </tr>
   <tr>
     <td colspan="2" nowrap>
-		<button id="btn_auto">Auto</button>
-		<button id="btn_keygen">New PVK</button>
+		<button id="btn_auto">New ID</button>
 		<button id="btn_enter">Login</button>
-		<button id="btn_encrypt" title="End-to-end encryption">Encrypt</button>
+		<button id="btn_encrypt" title="End-to-end encryption">ETE</button>
 		<button id="btn_close">Logout</button>
 		<button id="btn_send" title="Ctrl+Enter can work too">Send</button>
 	</td>
@@ -63,6 +59,7 @@ body,td,th {
 </table>
 
 <script src="./jsRSA.js"></script>
+<script src="./sha1.min.js"></script>
 <script src="./hc-core.js"></script>
 </body>
 </html>

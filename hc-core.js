@@ -7,7 +7,7 @@
 
 var CLIENT_VER = '180406 - ETE plus';
 
-var DEFAULT_SERVER = 'wss://us2.srdmobile.tk';
+var DEFAULT_SERVER = 'ws://localhost:9001';
 
 var SLICE_THRESHOLD = 40960;						// Data whose length(base64) over this amount will be splited
 var MAX_DATALENTH = SLICE_THRESHOLD*100;			// Max data length(base64)

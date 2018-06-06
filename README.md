@@ -1,5 +1,5 @@
 # henChat (Latest update: 2018.04.06)
-A fucking simple IM (?) based on websocket.<br>
+A simple IM (?) based on websocket.<br>
 ## Deployment
 ### Server
 hcScrver.py is the server. It works with azLib.py and websocket_server/.
